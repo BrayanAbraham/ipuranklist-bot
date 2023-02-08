@@ -7,6 +7,8 @@ const { Telegram, Telegraf } = require('telegraf');
 require('./config/config');
 var { mongoose } = require('./db/mongoose');
 var { Subscription } = require('./models/subscription');
+var { log } = require('./util/logger');
+var { callGitHubActions } = require('./client/githubActionsClient');
 var dataObj = JSON.parse(fs.readFileSync('./data/data.json', 'utf8'));
 
 
@@ -30,19 +32,21 @@ function extractEntriesFromPage(entryType, htmlPage) {
     let rows = [...tb.children].slice(0, numberOfEntries);
     let message = `📅 *RECENT ${numberOfEntries} ${entryType.toUpperCase()}S :*\n\n`;
     rows.forEach(row => {
-        let dateElement = getPossiblySpanWrappedElement(row.lastElementChild);
-        message += `*${dateElement.innerHTML.trim()}:*\n`;
-        let titleElement = getPossiblySpanWrappedElement(row.firstElementChild).firstElementChild;
-        message += `${sanitizePdfTitle(titleElement.innerHTML)}\n\n`;
+        let dateElementMessage = "---";
+        if (row.children.length !== 1) {
+            dateElementMessage = getPossiblySpanWrappedElement(row.lastElementChild);
+        }
+        message += `*${dateElementMessage}:*\n`;
+        let titleElementMessage = getPossiblySpanWrappedElement(row.firstElementChild);
+        message += `${sanitizePdfTitle(titleElementMessage)}\n\n`;
     });
     return message;
 }
 
 // Get possibly span wrapped element
 function getPossiblySpanWrappedElement(element) {
-    return element.innerHTML
-        .trim()
-        .startsWith("<span") ? element.firstElementChild : element;
+    let elementString = element.innerHTML.trim();
+    return elementString.replace(/<\/?[^>]+(>|$)/g, '');
 }
 
 // Sanitize PDF Title
@@ -50,29 +54,13 @@ function sanitizePdfTitle(title) {
     return title
         .replace('\n\t', '')
         .replace(/&amp;/g, '&')
-        .replace(/&nbsp;/g, '  ')
+        .replace(/&nbsp;/g, ' ')
         .replace('_', '-').trim();
 }
 
-// Prepend zeroes for 2 digit numbers.
-function pz(num) {
-    return ('0' + num).slice(-2);
-}
-
-// logger
-function log(str) {
-    let currentdate = new Date();
-    let datetime = pz(currentdate.getDate()) + "/"
-        + pz(currentdate.getMonth() + 1) + "/"
-        + currentdate.getFullYear() + " @ "
-        + pz(currentdate.getHours()) + ":"
-        + pz(currentdate.getMinutes()) + ":"
-        + pz(currentdate.getSeconds());
-    console.log(`${datetime} -> ${str}`);
-}
 
 // -----------------------------------------------------------------------------------------------
-// === HANDLER FUCTIONS ===
+// === TELEGRAM COMMAND HANDLER FUNCTIONS ===
 // Function to handle 'fetch latest entries' command
 function handleFetchCommand(entryType, ctx) {
     log(`Latest ${entryType} entries hit.`);
@@ -143,6 +131,7 @@ function handleCronExecution(entryType) {
         let message = extractEntriesFromPage(entryType, res.data);
         if (message !== dataObj.savedMessages[entryType]) {
             log(`=> Cron found updated ${entryType} entries.`);
+            callGitHubActions(entryType, message);
             Subscription.find({
                 type: entryType
             }).then(subs => {
@@ -185,7 +174,7 @@ function handleCronExecution(entryType) {
 
 
 // -----------------------------------------------------------------------------------------------
-// === COMMANDS ===
+// === TELEGRAM COMMANDS CONTROLLERS ===
 // --- FETCH COMMANDS ---
 // Handling the fetch last 10 results.
 bot.command('results', (ctx) => {
@@ -285,4 +274,4 @@ cron.schedule(cronFrequency, () => {
 // === LAUNCH ===
 // Launching the bot to handle all commands.
 bot.launch();
-log(`Telegram BOT started | ENV : ${process.env.NODE_ENV}`);
+log(`Telegram BOT started | ENV : ${process.env.ENVIRONMENT}`);
